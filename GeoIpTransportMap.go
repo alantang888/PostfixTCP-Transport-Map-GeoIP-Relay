@@ -21,9 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/oschwald/geoip2-golang"
+	log "github.com/sirupsen/logrus"
 	cli "gopkg.in/urfave/cli.v1"
 	"io"
-	"log"
 	"math/rand"
 	"net"
 	"os"
@@ -36,6 +36,16 @@ var defaultTarget string
 
 func init() {
 	destinationMap = make(map[string][]string)
+
+	// Log as JSON instead of the default ASCII formatter.
+	log.SetFormatter(&log.JSONFormatter{})
+
+	// Output to stdout instead of the default stderr
+	// Can be any io.Writer, see below for File example
+	log.SetOutput(os.Stdout)
+
+	// Only log the warning severity or above.
+	log.SetLevel(log.InfoLevel)
 }
 
 func main() {
@@ -47,7 +57,7 @@ func main() {
 	// Args parse
 	err := app.Run(os.Args)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Parse args error: ", err.Error())
 	}
 
 	// TODO: handle geoip db update
@@ -56,15 +66,14 @@ func main() {
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%s", listenInterface, listenPort))
 	if err != nil {
-		log.Fatal(fmt.Sprintf("Listen %s:%s error: %s\n", listenInterface, listenPort, err.Error()))
+		log.Fatalf("Listen %s:%s error: %s", listenInterface, listenPort, err.Error())
 	}
 	defer listener.Close()
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			// TODO: Change to logger
-			fmt.Printf("Connection accept error.\n")
+			log.Errorf("Connection accept error for %v.", conn.RemoteAddr())
 			continue
 		}
 
@@ -140,18 +149,15 @@ func argsHandler(c *cli.Context) error {
 }
 
 func handleConnection(conn net.Conn) {
-	// TODO: Change to logger
-	fmt.Printf("Connect from '%v'.\n", conn.RemoteAddr())
+	log.Infof("Start handle connection '%v'.", conn.RemoteAddr())
 	reader := bufio.NewReader(conn)
 	for {
 		data, err := reader.ReadBytes('\n')
 		if err != nil {
 			if err == io.EOF {
-				// TODO: Change to logger
-				fmt.Printf("Connection closed from %v.\n", conn.RemoteAddr())
+				log.Infof("Connection closed from %v.", conn.RemoteAddr())
 			} else {
-				// TODO: Change to logger
-				fmt.Printf("Read from %v error: '%s'.\n", conn.RemoteAddr(), err.Error())
+				log.Errorf("Read from %v error: '%s'.", conn.RemoteAddr(), err.Error())
 			}
 			conn.Close()
 			return
@@ -160,21 +166,22 @@ func handleConnection(conn net.Conn) {
 		//if length < 1{
 		dataString := string(data[:length-1])
 
-		// TODO: Change to logger
-		fmt.Printf("Received '%s'\n", dataString)
+		log.Infof("Received '%s'", dataString)
 
 		result := getResult(dataString)
-		conn.Write([]byte(result))
+		conn.Write([]byte(genPostfixResponse(result)))
+		log.Infof("Email %s use %s as next hop.", dataString, result)
 	}
 }
 
 func getEmailDomain(email string) (string, error) {
 	splitedEmail := strings.Split(email, "@")
 	if len(splitedEmail) != 2 {
-		return "", errors.New(fmt.Sprintf("Email address invalid: %v", email))
+		errorMsg := fmt.Sprintf("Email address invalid: %v", email)
+		log.Warnln(errorMsg)
+		return "", errors.New(errorMsg)
 	}
 
-	// TODO: Add info log
 	return splitedEmail[1], nil
 }
 
@@ -183,8 +190,7 @@ func getMx(domain string) ([]*net.MX, error) {
 	mxs, err := net.LookupMX(domain)
 
 	if err != nil {
-		// TODO: Change to logger
-		fmt.Printf("Get MX error on %v: %v\n", domain, err)
+		log.Warnf("Get MX error on %v: %v", domain, err)
 		return mxs, err
 	}
 
@@ -201,8 +207,7 @@ func isIpv4(ip net.IP) bool {
 func getIp(mx *net.MX) (net.IP, error) {
 	ips, err := net.LookupIP(mx.Host)
 	if err != nil {
-		// TODO: Change to logger
-		fmt.Printf("Get IP error on %v: %v\n", mx.Host, err)
+		log.Warnf("Get IP error on %v: %v", mx.Host, err)
 		return net.IP{}, errors.New(fmt.Sprint("Get IP error from MX record(s)."))
 	}
 
@@ -219,21 +224,20 @@ func getIp(mx *net.MX) (net.IP, error) {
 		return ips[rand.Intn(length)], nil
 	}
 
-	return net.IP{}, errors.New(fmt.Sprint("Get IP error from MX record(s)."))
+	return net.IP{}, errors.New(fmt.Sprint("Can't get IP from \"%s\" MX record(s).", mx.Host))
 }
 
 func getCountryByIp(ipAddress net.IP) (string, error) {
 	// TODO: reduce read file. should read from cache by geoip2.FromBytes()
 	db, err := geoip2.Open("GeoLite2-Country.mmdb")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Open GeoIP DB file error: %s", err.Error())
 	}
 	defer db.Close()
 
 	record, err := db.Country(ipAddress)
 	if err != nil {
-		// TODO: Change to logger
-		fmt.Printf("Get country error on %v: %v\n", ipAddress.String(), err)
+		log.Warnf("Get country error on %v: %v", ipAddress.String(), err)
 		return "", err
 	}
 
@@ -250,14 +254,12 @@ func getResult(email string) string {
 
 	domain, domainErr := getEmailDomain(email)
 	if domainErr != nil {
-		// TODO: Change to logger
-		fmt.Printf("%s\n", domainErr.Error())
-		return genPostfixResponse(destination)
+		return destination
 	}
 
 	mxs, mxErr := getMx(domain)
 	if mxErr != nil {
-		return genPostfixResponse(destination)
+		return destination
 	}
 
 	for _, mx := range mxs {
@@ -271,13 +273,12 @@ func getResult(email string) string {
 			continue
 		}
 
-		// TODO: Change to logger
-		fmt.Printf("Got country code: %s for domain:%s\n", country, domain)
+		log.Infof("Got country code: %s for domain:%s", country, domain)
 		if value, ok := destinationMap[country]; ok {
 			destination = value[rand.Intn(len(value))]
 		}
 		break
 	}
 
-	return genPostfixResponse(destination)
+	return destination
 }
