@@ -44,7 +44,7 @@ func init() {
 	// Can be any io.Writer, see below for File example
 	log.SetOutput(os.Stdout)
 
-	// Only log the warning severity or above.
+	// Only log the info severity or above.
 	log.SetLevel(log.InfoLevel)
 }
 
@@ -145,6 +145,9 @@ func argsHandler(c *cli.Context) error {
 		cli.ShowAppHelp(c)
 		return errors.New(fmt.Sprintf(`Default target "%s" not in target map.`, defaultTarget))
 	}
+
+	log.Infof("Start with target map: %v, default: %s", destinationMap, defaultTarget)
+
 	return nil
 }
 
@@ -250,7 +253,7 @@ func genPostfixResponse(destination string) string {
 
 func getResult(email string) string {
 	rand.Seed(time.Now().UnixNano())
-	destination := destinationMap[defaultTarget][rand.Intn(len(defaultTarget))]
+	destination := destinationMap[defaultTarget][rand.Intn(len(destinationMap[defaultTarget]))]
 
 	domain, domainErr := getEmailDomain(email)
 	if domainErr != nil {
